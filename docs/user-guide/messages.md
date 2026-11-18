@@ -371,6 +371,20 @@ slackcli messages draft --recipient-id=C1234567890 --message="Hello team!"
 Creates an unsent draft in the Slack client — useful when you want a human to
 review and press send.
 
+Attach screenshots or other files with `--file`, once per file (up to 10):
+
+```bash
+slackcli messages draft --permalink=https://acme.slack.com/archives/C1234567890/p1712345678123456 \
+  --message-file=reply.md --file=before.png --file=after.png
+```
+
+Each file is uploaded privately (`files.completeUploadExternal` with no channel)
+and stays unshared until a human sends the draft from Slack. Every path is
+checked before the first upload: a missing, empty or non-regular file, a path
+given twice, or more than 10 files fails with `invalid_input` and uploads
+nothing. A failed upload creates no draft. `--dry-run` lists the files and their
+total size without uploading.
+
 To send a reviewed draft or discard it:
 
 ```bash
@@ -413,7 +427,8 @@ it does on `messages send`, including `-` for standard input.
 
 `--json` prints the draft's identity. A draft is unsent, so it has no message
 timestamp and no permalink — the draft id is what a follow-up has to work with.
-`thread_ts` is present only when the draft is a threaded reply.
+`thread_ts` is present only when the draft is a threaded reply, and `file_ids`
+only when `--file` attached files.
 
 ```json
 {

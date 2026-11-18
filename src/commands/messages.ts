@@ -15,6 +15,7 @@ import {
   workspaceMismatchWarning,
 } from '../lib/slack-url-parser.ts';
 import {
+  checkDraftFilePaths,
   checkUploadFile,
   DRAFT_CREATE_AUTH_MESSAGE,
   DRAFT_DELETE_AUTH_MESSAGE,
@@ -218,8 +219,9 @@ const HELP = {
     examples: [
       'slackcli messages draft --recipient-id C0123456789 --message "Release notes for review"',
       'slackcli messages draft --permalink https://acme.slack.com/archives/C0123456789/p1712345678123456 --message-file ./reply.md --json',
+      'slackcli messages draft --recipient-id C0123456789 --message "Before and after" --file before.png --file after.png',
     ],
-    json: '{ channel_id, draft_id, thread_ts? } (thread_ts only for a threaded draft).',
+    json: '{ channel_id, draft_id, thread_ts?, file_ids? } (thread_ts only for a threaded draft, file_ids only with --file).',
     browserOnly: true,
     notes: [
       RECIPIENT_NOTE,
@@ -231,6 +233,8 @@ const HELP = {
       REPLY_LINK_NOTE,
       MESSAGE_TEXT_NOTE,
       STDIN_NOTE,
+      '--file is repeatable, up to 10 files. Each file is uploaded privately and stays unshared until ' +
+        'a human sends the draft from Slack. Paths are checked before any upload; a failed upload creates no draft.',
       'Creates the draft immediately, with no confirmation prompt.',
     ],
     dryRun: true,
@@ -579,6 +583,24 @@ async function buildSendDryRunPayload(
     files: filePaths,
     total_size: files.reduce((sum, f) => sum + f.size, 0),
     comment: message,
+  };
+}
+
+// The dry-run payload of a draft: the text, plus the files and their total
+// size when --file is given. The checks match the real run, so a dry run
+// fails on the same bad path, repeat or count.
+async function buildDraftDryRunPayload(
+  filePaths: string[] | undefined,
+  message: string,
+): Promise<Record<string, unknown>> {
+  if (!filePaths) return { text: message };
+
+  checkDraftFilePaths(filePaths);
+  const files = await Promise.all(filePaths.map((p: string) => checkUploadFile(p)));
+  return {
+    text: message,
+    files: filePaths,
+    total_size: files.reduce((sum, f) => sum + f.size, 0),
   };
 }
 
@@ -1015,6 +1037,10 @@ export function createMessagesCommand(): Command {
     )
     .option('--thread-ts <timestamp>', 'Thread to draft a reply in (1234567890.123456 or p1234567890123456)')
     .option('--permalink <url>', 'Slack message link; drafts a reply in that message\'s thread (replaces --recipient-id and --thread-ts)')
+    .addOption(
+      new Option('--file <path>', 'Attach a file to the draft (repeatable, up to 10)')
+        .argParser<string[]>((value, previous) => (previous ?? []).concat([value]))
+    )
     .option('--workspace <id|name>', 'Workspace to use')
     .option('--json', 'Output the created draft as JSON', false)
     .option(DRY_RUN_FLAG, DRY_RUN_DESCRIPTION, false)
@@ -1023,13 +1049,15 @@ export function createMessagesCommand(): Command {
 
       try {
         const message = await resolveMessageText(options);
+        const filePaths: string[] | undefined = options.file;
         const { client, recipientId, target } = await resolveRecipient(options, spinner);
 
         if (options.dryRun) {
           client.requireBrowserAuth(DRAFT_CREATE_AUTH_MESSAGE);
+          const payload = await buildDraftDryRunPayload(filePaths, message);
           spinner.stop();
           emitDryRun(
-            await buildPreview(client, 'create draft', recipientTarget(recipientId, target.threadTs), { text: message }, { lookupName: true }),
+            await buildPreview(client, 'create draft', recipientTarget(recipientId, target.threadTs), payload, { lookupName: true }),
             options.json,
           );
           return;
@@ -1040,6 +1068,7 @@ export function createMessagesCommand(): Command {
         spinner.text = 'Creating draft...';
         const response = await client.createDraft(channelId, message, {
           thread_ts: target.threadTs,
+          ...(filePaths ? { file_paths: filePaths } : {}),
         });
 
         spinner.succeed('Draft created successfully!');
@@ -1050,6 +1079,7 @@ export function createMessagesCommand(): Command {
             channel_id: channelId,
             draft_id: response.draft.id,
             ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
+            ...(response.file_ids ? { file_ids: response.file_ids } : {}),
           });
         } else {
           success(`Draft ID: ${response.draft.id}`);

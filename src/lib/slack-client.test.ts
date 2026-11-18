@@ -818,6 +818,105 @@ describe('SlackClient.createDraft', () => {
   });
 });
 
+describe('SlackClient.createDraft with files', () => {
+  it('uploads screenshots privately and attaches them to the unsent draft', async () => {
+    // A reviewer drafts a reply with two screenshots. Nothing may reach the
+    // channel until a human presses send in Slack.
+    const dir = await mkdtemp(join(tmpdir(), 'slackcli-draft-files-'));
+    const first = join(dir, 'scope.png');
+    const second = join(dir, 'aggregation.png');
+    await Bun.write(first, 'png-1');
+    await Bun.write(second, 'png-22');
+
+    const uploads: string[] = [];
+    globalThis.fetch = (async (input) => {
+      uploads.push(String(input));
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const client = new TestSlackClient();
+
+      const response = await client.createDraft('C123', 'see attached', {
+        thread_ts: '1712345678.000100',
+        file_paths: [first, second],
+      });
+
+      // Upload completion carries no channel_id, thread_ts or comment: Slack
+      // keeps the files private to the uploader instead of posting them.
+      expect(client.calls.map((c) => c.method)).toEqual([
+        'files.getUploadURLExternal',
+        'files.getUploadURLExternal',
+        'files.completeUploadExternal',
+        'drafts.create',
+      ]);
+      expect(client.calls[2]?.params).toEqual({
+        files: JSON.stringify([
+          { id: 'F1', title: 'scope.png' },
+          { id: 'F2', title: 'aggregation.png' },
+        ]),
+      });
+      expect(uploads).toHaveLength(2);
+
+      // The draft references the private files in the order given.
+      const draft = client.calls[3]?.params ?? {};
+      expect(draft.file_ids).toBe(JSON.stringify(['F1', 'F2']));
+      expect(JSON.parse(String(draft.destinations))).toEqual([
+        { channel_id: 'C123', thread_ts: '1712345678.000100', broadcast: false },
+      ]);
+      expect(response.file_ids).toEqual(['F1', 'F2']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a text-only draft free of upload calls', async () => {
+    const client = new TestSlackClient();
+    await client.createDraft('C123', 'plain');
+    expect(client.calls.map((c) => c.method)).toEqual(['drafts.create']);
+    expect(client.calls[0]?.params.file_ids).toBe('[]');
+  });
+
+  it.each([
+    ['a missing path', (dir: string) => [join(dir, 'nope.png')], /File not found/],
+    ['a repeated path', (dir: string) => [join(dir, 'a.png'), join(dir, 'a.png')], /more than once/],
+    ['more than 10 files', (dir: string) => Array.from({ length: 11 }, () => join(dir, 'a.png')), /at most 10/],
+  ])('refuses %s before uploading anything', async (_label, paths, error) => {
+    const dir = await mkdtemp(join(tmpdir(), 'slackcli-draft-bad-'));
+    await Bun.write(join(dir, 'a.png'), 'png');
+    let fetched = false;
+    globalThis.fetch = (async (_input, _init) => {
+      fetched = true;
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const client = new TestSlackClient();
+      await expect(client.createDraft('C123', 'x', { file_paths: paths(dir) })).rejects.toThrow(error);
+      expect(client.calls).toEqual([]);
+      expect(fetched).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates no draft when an upload fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slackcli-draft-putfail-'));
+    const file = join(dir, 'a.png');
+    await Bun.write(file, 'png');
+    globalThis.fetch = (async (_input, _init) => new Response('', { status: 500 })) as typeof fetch;
+
+    try {
+      const client = new TestSlackClient();
+      await expect(client.createDraft('C123', 'x', { file_paths: [file] }))
+        .rejects.toThrow('File upload failed for a.png: HTTP 500');
+      expect(client.calls.map((c) => c.method)).toEqual(['files.getUploadURLExternal']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('SlackClient.deleteDraft', () => {
   it('sends the draft id and current timestamp to the browser-only endpoint', async () => {
     const client = new TestSlackClient();

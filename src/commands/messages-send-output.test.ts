@@ -178,3 +178,58 @@ describe('messages send delivered-message output', () => {
     expect(stdout).toContain('File uploaded successfully\n');
   });
 });
+
+describe('messages draft --file output', () => {
+  let savedExitCode: typeof process.exitCode;
+
+  beforeEach(() => {
+    stdout = '';
+    stderr = '';
+    calls = [];
+    savedExitCode = process.exitCode;
+    process.exitCode = 0;
+    spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      stdout += chunk.toString();
+      return true;
+    }) as typeof process.stdout.write);
+    spyOn(process.stderr, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      stderr += chunk.toString();
+      return true;
+    }) as typeof process.stderr.write);
+  });
+
+  afterEach(() => {
+    process.exitCode = savedExitCode;
+  });
+
+  async function draft(argv: string[]): Promise<void> {
+    const client = fakeClient(undefined);
+    spyOn(client, 'createDraft').mockImplementation(async (...args: unknown[]) => {
+      calls.push({ method: 'createDraft', args });
+      const paths = (args[2] as { file_paths?: string[] }).file_paths ?? [];
+      return { ok: true, draft: { id: 'Dr0123456789' }, ...(paths.length ? { file_ids: paths.map((_, i) => `F${i + 1}`) } : {}) } as any;
+    });
+    spyOn(authLib, 'getAuthenticatedClient').mockResolvedValue(client);
+    await createMessagesCommand().parseAsync(['draft', ...argv], { from: 'user' });
+  }
+
+  it('hands the files to the draft and reports their ids under --json', async () => {
+    await draft(['--recipient-id', 'C0123456789', '--message', 'see', '--file', 'a.png', '--file', 'b.png', '--thread-ts', '1712345678.000001', '--json']);
+
+    expect(calls).toStrictEqual([
+      { method: 'createDraft', args: ['C0123456789', 'see', { thread_ts: '1712345678.000001', file_paths: ['a.png', 'b.png'] }] },
+    ]);
+    expect(JSON.parse(stdout)).toStrictEqual({
+      channel_id: 'C0123456789',
+      draft_id: 'Dr0123456789',
+      thread_ts: '1712345678.000001',
+      file_ids: ['F1', 'F2'],
+    });
+  });
+
+  it('keeps the text-only --json shape unchanged', async () => {
+    await draft(['--recipient-id', 'C0123456789', '--message', 'see', '--json']);
+
+    expect(JSON.parse(stdout)).toStrictEqual({ channel_id: 'C0123456789', draft_id: 'Dr0123456789' });
+  });
+});

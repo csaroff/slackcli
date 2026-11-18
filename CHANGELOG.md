@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`messages draft --file` attaches files to a draft**: repeatable up to 10 files. Each file is uploaded privately and stays unshared until a human sends the draft from Slack; paths are checked before any upload, and a failed upload creates no draft. `--json` adds `file_ids` (#507)
+
 ### Fixed
 - **`auth parse-curl` reads Firefox's "Copy as cURL"**: Firefox sends the request body with `--data-binary` and puts it on its own line after a `\` line continuation, so parsing failed with "Could not find xoxc token in request data". Both forms are now accepted, and a flag's value may follow it on a continuation line (#549)
 

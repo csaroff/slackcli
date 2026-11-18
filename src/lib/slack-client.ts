@@ -301,6 +301,23 @@ export async function checkUploadFile(filePath: string): Promise<{ filename: str
   return { filename: basename(filePath), size: fileStats.size };
 }
 
+// Slack attaches at most 10 files to one message, and a draft is one message.
+export const MAX_DRAFT_FILES = 10;
+
+// Checks on the list of draft attachments that need no file system access.
+export function checkDraftFilePaths(filePaths: string[]): void {
+  if (filePaths.length > MAX_DRAFT_FILES) {
+    throw new InvalidInputError(`A draft can carry at most ${MAX_DRAFT_FILES} files (got ${filePaths.length})`);
+  }
+  const seen = new Set<string>();
+  for (const filePath of filePaths) {
+    if (seen.has(filePath)) {
+      throw new InvalidInputError(`File given more than once: ${filePath}`);
+    }
+    seen.add(filePath);
+  }
+}
+
 // The refusals of the browser-only draft calls on an app token.
 export const DRAFT_CREATE_AUTH_MESSAGE = 'Draft creation requires browser authentication';
 export const DRAFT_LIST_AUTH_MESSAGE = 'Draft listing requires browser authentication';
@@ -712,6 +729,16 @@ export class SlackClient {
     initial_comment?: string;
     thread_ts?: string;
   } = {}): Promise<ExternalUploadCompleteResponse> {
+    return this.uploadFiles(filePaths, { channel_id: channel, ...options });
+  }
+
+  // The shared upload flow. Without `share.channel_id`, completeUploadExternal
+  // leaves the files private to the uploader, which is what a draft needs.
+  private async uploadFiles(filePaths: string[], share: {
+    channel_id?: string;
+    initial_comment?: string;
+    thread_ts?: string;
+  } = {}): Promise<ExternalUploadCompleteResponse> {
     if (filePaths.length === 0) {
       throw new InvalidInputError('No files to upload');
     }
@@ -768,21 +795,29 @@ export class SlackClient {
       uploaded.push({ id: uploadUrlResponse.file_id, title: filename });
     }
 
-    const params: Record<string, string> = {
-      files: JSON.stringify(uploaded),
-      channel_id: channel,
-    };
-    if (options.initial_comment) params.initial_comment = options.initial_comment;
-    if (options.thread_ts) params.thread_ts = options.thread_ts;
+    const params: Record<string, string> = { files: JSON.stringify(uploaded) };
+    if (share.channel_id) params.channel_id = share.channel_id;
+    if (share.initial_comment) params.initial_comment = share.initial_comment;
+    if (share.thread_ts) params.thread_ts = share.thread_ts;
 
     return this.request('files.completeUploadExternal', params);
   }
 
-  // Create draft message
+  // Create draft message. With file_paths, the files are uploaded privately
+  // first and attached to the draft; they are shared only when a human sends it
+  // from Slack. A failed upload creates no draft.
   async createDraft(channelId: string, text: string, options: {
     thread_ts?: string;
+    file_paths?: string[];
   } = {}): Promise<any> {
     this.requireBrowserAuth(DRAFT_CREATE_AUTH_MESSAGE);
+
+    let fileIds: string[] = [];
+    if (options.file_paths && options.file_paths.length > 0) {
+      checkDraftFilePaths(options.file_paths);
+      const upload = await this.uploadFiles(options.file_paths);
+      fileIds = (upload.files ?? []).flatMap((f) => (f.id ? [f.id] : []));
+    }
 
     const destinations: any = [{ channel_id: channelId }];
     if (options.thread_ts) {
@@ -794,11 +829,12 @@ export class SlackClient {
       client_msg_id: crypto.randomUUID(),
       blocks: JSON.stringify(parseMrkdwn(text)),
       destinations: JSON.stringify(destinations),
-      file_ids: '[]',
+      file_ids: JSON.stringify(fileIds),
       is_from_composer: 'false',
     };
 
-    return this.request('drafts.create', params);
+    const response = await this.request('drafts.create', params);
+    return fileIds.length > 0 ? { ...response, file_ids: fileIds } : response;
   }
 
   // List active drafts (browser auth only; Slack has no public API for drafts).

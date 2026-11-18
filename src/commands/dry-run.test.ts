@@ -296,6 +296,16 @@ describe('--dry-run', () => {
     expect(preview.payload).toEqual({ file: a, file_size: 5, files: [a, b], total_size: 11, comment: 'Both' });
   });
 
+  it('previews draft attachments without uploading them', async () => {
+    const a = join(dir, 'scope.png');
+    const b = join(dir, 'agg.png');
+    await Bun.write(a, 'alpha');       // 5 bytes
+    await Bun.write(b, 'bravo!');      // 6 bytes
+    const preview = await runJson(['messages', 'draft', '--recipient-id', 'C0123456789', '--file', a, '--file', b, '--message', 'See']);
+    expect(preview.action).toBe('create draft');
+    expect(preview.payload).toEqual({ text: 'See', files: [a, b], total_size: 11 });
+  });
+
   it('previews a send to a user without opening the DM', async () => {
     const preview = await runJson(['messages', 'send', '--recipient-id', 'U0123456789', '--message', 'hi']);
     expect(preview.target).toEqual({ kind: 'user', id: 'U0123456789', name: '@alice' });
@@ -414,6 +424,7 @@ describe('--dry-run', () => {
     [['messages', 'send', '--recipient-id', 'C0123456789', '--message', 'hi', '--blocks', '[{"type":""}]'], 'invalid_input'],
     [['messages', 'send', '--recipient-id', 'C0123456789', '--message-file', '/nonexistent/slackcli-note.md'], 'invalid_input'],
     [['messages', 'send', '--recipient-id', 'C0123456789', '--message', 'hi', '--file', '/nonexistent/slackcli-file.txt'], 'invalid_input'],
+    [['messages', 'draft', '--recipient-id', 'C0123456789', '--message', 'hi', '--file', '/nonexistent/slackcli-file.txt'], 'invalid_input'],
     [['messages', 'send', '--message', 'hi'], 'invalid_input'],
     [['messages', 'edit', '--channel-id', 'C0123456789', '--message', 'hi'], 'invalid_input'],
     [['messages', 'delete', '--channel-id', 'C0123456789'], 'invalid_input'],
