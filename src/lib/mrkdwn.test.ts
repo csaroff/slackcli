@@ -342,3 +342,63 @@ describe('parseMrkdwn', () => {
     );
   });
 });
+
+describe('parseMrkdwn block structure', () => {
+  function blocks(text: string) {
+    return parseMrkdwn(text)[0].elements;
+  }
+
+  it('answers quoted claims inline, the way a point-by-point reply reads in Slack', () => {
+    // A reviewer quotes each claim and answers it underneath. Slack keeps
+    // consecutive > lines in one quote block and the answer in a section.
+    const reply = [
+      '> Smart Alerts do not evaluate percentiles',
+      '> (from the technote)',
+      'This is *incorrect*.',
+      '',
+      '> Grace period',
+      'It delays closing, not opening.',
+    ].join('\n');
+
+    expect(blocks(reply)).toEqual([
+      { type: 'rich_text_quote', elements: [{ type: 'text', text: 'Smart Alerts do not evaluate percentiles\n(from the technote)' }] },
+      {
+        type: 'rich_text_section',
+        elements: [
+          { type: 'text', text: 'This is ' },
+          { type: 'text', text: 'incorrect', style: { bold: true } },
+          { type: 'text', text: '.\n\n' },
+        ],
+      },
+      { type: 'rich_text_quote', elements: [{ type: 'text', text: 'Grace period' }] },
+      { type: 'rich_text_section', elements: [{ type: 'text', text: 'It delays closing, not opening.' }] },
+    ]);
+  });
+
+  it('keeps a code fence verbatim, without styling its contents', () => {
+    expect(blocks('Example:\n```if (a *b* c) {\n  x_y_z\n}```\nDone')).toEqual([
+      { type: 'rich_text_section', elements: [{ type: 'text', text: 'Example:\n' }] },
+      { type: 'rich_text_preformatted', elements: [{ type: 'text', text: 'if (a *b* c) {\n  x_y_z\n}' }] },
+      { type: 'rich_text_section', elements: [{ type: 'text', text: 'Done' }] },
+    ]);
+  });
+
+  it('drops the newlines that only frame a fence, as Slack stores a typed code block', () => {
+    expect(blocks('Example:\n```\nx = 1\n```\nDone')).toEqual([
+      { type: 'rich_text_section', elements: [{ type: 'text', text: 'Example:\n' }] },
+      { type: 'rich_text_preformatted', elements: [{ type: 'text', text: 'x = 1' }] },
+      { type: 'rich_text_section', elements: [{ type: 'text', text: 'Done' }] },
+    ]);
+  });
+
+  it.each([
+    ['a > that does not start a line', 'a > b', [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'a > b' }] }]],
+    ['an unclosed fence', 'see ```code', [{ type: 'rich_text_section', elements: [{ type: 'text', text: 'see ```code' }] }]],
+    ['&gt; as a quote marker', '&gt; quoted\nreply', [
+      { type: 'rich_text_quote', elements: [{ type: 'text', text: 'quoted' }] },
+      { type: 'rich_text_section', elements: [{ type: 'text', text: 'reply' }] },
+    ]],
+  ])('handles %s', (_label, text, expected) => {
+    expect(blocks(text)).toEqual(expected as any);
+  });
+});

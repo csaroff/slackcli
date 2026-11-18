@@ -1,6 +1,7 @@
 // Parse Slack mrkdwn text into rich_text block elements.
 // Supports: *bold*, _italic_, ~strike~, `code`, and combinations, plus the
-// <@U…>, <!subteam^S…>, <#C…>, <!here|channel|everyone> and <url|label> tokens.
+// <@U…>, <!subteam^S…>, <#C…>, <!here|channel|everyone> and <url|label> tokens,
+// > quote lines (rich_text_quote) and ``` fences (rich_text_preformatted).
 
 interface RichTextStyle {
   bold?: boolean;
@@ -19,7 +20,7 @@ type RichTextElement = (
 ) & { style?: RichTextStyle };
 
 interface RichTextSection {
-  type: 'rich_text_section';
+  type: 'rich_text_section' | 'rich_text_quote' | 'rich_text_preformatted';
   elements: RichTextElement[];
 }
 
@@ -205,17 +206,83 @@ function parseInline(text: string): RichTextElement[] {
   return stripEmptyStyles(elements);
 }
 
+// One block of a message: plain text with inline styles, a run of > lines,
+// or the inside of a ``` fence.
+type Segment = { kind: 'section' | 'quote' | 'code'; text: string };
+
+const FENCE = '```';
+const QUOTE_LINE = /^(?:>|&gt;) ?/;
+
+// Split the text into sections, quotes and code fences, the way Slack's
+// composer does. A fence must be closed to count; otherwise it stays text.
+function splitSegments(text: string): Segment[] {
+  const segments: Segment[] = [];
+  const push = (kind: Segment['kind'], value: string) => {
+    if (value === '' && kind !== 'code') return;
+    const last = segments[segments.length - 1];
+    if (last && last.kind === kind && kind !== 'code') last.text += value;
+    else segments.push({ kind, text: value });
+  };
+
+  let rest = text;
+  while (rest.length > 0) {
+    const open = rest.indexOf(FENCE);
+    const close = open === -1 ? -1 : rest.indexOf(FENCE, open + FENCE.length);
+    const plain = close === -1 ? rest : rest.slice(0, open);
+    for (const piece of splitQuotes(plain)) push(piece.kind, piece.text);
+    if (close === -1) break;
+    // The newlines just inside a fence and the one right after it only frame
+    // the block; Slack does not store them.
+    push('code', rest.slice(open + FENCE.length, close).replace(/^\n/, '').replace(/\n$/, ''));
+    rest = rest.slice(close + FENCE.length).replace(/^\n/, '');
+  }
+  return segments;
+}
+
+// Consecutive > lines become one quote; the newline that ends a quote run
+// belongs to the quote block, so it is dropped rather than left in the text.
+function splitQuotes(text: string): Segment[] {
+  const out: Segment[] = [];
+  const lines = text.split('\n');
+  let quote: string[] = [];
+  let section = '';
+  const flushQuote = () => {
+    if (quote.length > 0) out.push({ kind: 'quote', text: quote.join('\n') });
+    quote = [];
+  };
+  lines.forEach((line, index) => {
+    const last = index === lines.length - 1;
+    if (QUOTE_LINE.test(line)) {
+      if (section) out.push({ kind: 'section', text: section });
+      section = '';
+      quote.push(line.replace(QUOTE_LINE, ''));
+      return;
+    }
+    flushQuote();
+    section += line + (last ? '' : '\n');
+  });
+  flushQuote();
+  if (section) out.push({ kind: 'section', text: section });
+  return out;
+}
+
 export function parseMrkdwn(text: string): RichTextBlock[] {
   // Keep newlines embedded in text elements rather than splitting into multiple sections.
   // Slack's draft composer renders multiple rich_text_section elements inline (no line breaks),
   // but correctly preserves \n characters within a single text element.
-  const elements = parseInline(text);
+  const blocks: RichTextSection[] = splitSegments(text).map((segment) => {
+    if (segment.kind === 'code') {
+      return { type: 'rich_text_preformatted', elements: [{ type: 'text', text: segment.text }] };
+    }
+    const elements = parseInline(segment.text);
+    return {
+      type: segment.kind === 'quote' ? 'rich_text_quote' : 'rich_text_section',
+      elements: elements.length > 0 ? elements : [{ type: 'text', text: '' }],
+    };
+  });
 
   return [{
     type: 'rich_text',
-    elements: [{
-      type: 'rich_text_section',
-      elements: elements.length > 0 ? elements : [{ type: 'text', text: '' }],
-    }],
+    elements: blocks.length > 0 ? blocks : [{ type: 'rich_text_section', elements: [{ type: 'text', text: '' }] }],
   }];
 }

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`messages draft --file` attaches files to a draft**: repeatable up to 10 files. Each file is uploaded privately and stays unshared until a human sends the draft from Slack; paths are checked before any upload, and a failed upload creates no draft. `--json` adds `file_ids` (#507)
+- **Drafts keep quotes and code blocks**: `>` lines become a quote and ``` fences a code block in the composer, instead of literal `>` and backticks
 - **Draft-only mode for assistants and scripts**: with `~/.config/slackcli/draft-only` present or `SLACKCLI_DRAFT_ONLY` set, every Slack call other than a read, a draft or a private upload is refused with `permission_denied` before it is sent. The file cannot be switched off from the environment
 
 ### Fixed
