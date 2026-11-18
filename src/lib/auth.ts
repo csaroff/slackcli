@@ -34,6 +34,7 @@ import {
   type CapturedWorkspace,
   type BrowserSessionFailure,
 } from './browser-auth.ts';
+import { isDraftOnly } from './draft-only.ts';
 
 const logger = getLogger(['slackcli', 'auth']);
 
@@ -536,10 +537,11 @@ export async function workspaceFromEnvToken(
 // Get authenticated client for workspace
 export async function getAuthenticatedClient(workspaceIdentifier?: string): Promise<SlackClient> {
   const selection = effectiveSelection(workspaceIdentifier, process.env);
+  const options = { draftOnly: isDraftOnly() };
   if (selection.source === 'env_token') {
-    return new SlackClient((await workspaceFromEnvToken(selection.envToken)).config);
+    return new SlackClient((await workspaceFromEnvToken(selection.envToken)).config, options);
   }
-  return new SlackClient(await selectWorkspace(selection));
+  return new SlackClient(await selectWorkspace(selection), options);
 }
 
 // `@slack/web-api` retries a dead connection for about thirty minutes by

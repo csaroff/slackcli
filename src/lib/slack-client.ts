@@ -18,6 +18,7 @@ import { parseMrkdwn } from './mrkdwn.ts';
 import { extractSlackWorkspaceName } from './curl-parser.ts';
 import { RateLimiter, slackRateLimiter } from './rate-limiter.ts';
 import { decideRetry, parseRetryAfter, resolveRetryOptions } from './retry.ts';
+import { assertDraftOnlyAllows } from './draft-only.ts';
 import type { RetryOptions } from './retry.ts';
 import { InvalidInputError, UnsupportedAuthTypeError } from './cli-errors.ts';
 import { SlackAuthError, authErrorProfile, isAuthErrorCode } from './auth-errors.ts';
@@ -46,6 +47,12 @@ export interface SlackClientOptions {
    * through.
    */
   sdkRetries?: number;
+  /**
+   * Refuse every call that is not a read, a draft or a private upload
+   * (`draft-only.ts`). The CLI sets it from `isDraftOnly()` in
+   * `getAuthenticatedClient()`.
+   */
+  draftOnly?: boolean;
 }
 
 /**
@@ -433,6 +440,7 @@ export class SlackClient {
   private readonly rateLimiter: RateLimiter;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly retryOptions: RetryOptions;
+  readonly draftOnly: boolean;
   // The only host the browser transport sends the session cookie and token to.
   private readonly browserOrigin?: string;
 
@@ -446,6 +454,7 @@ export class SlackClient {
     this.rateLimiter = options.rateLimiter ?? slackRateLimiter;
     this.sleep = options.sleep ?? defaultSleep;
     this.retryOptions = resolveRetryOptions(options.retry);
+    this.draftOnly = options.draftOnly ?? false;
 
     // Only use WebClient for standard auth
     if (config.auth_type === 'standard') {
@@ -480,6 +489,8 @@ export class SlackClient {
   // An authentication failure (`auth-errors.ts`) is rethrown as a
   // `SlackAuthError`. It is not a transport error, so it is never retried.
   async request(method: string, params: Record<string, any> = {}): Promise<any> {
+    if (this.draftOnly) assertDraftOnlyAllows(method, params);
+
     if (this.config.auth_type === 'standard') {
       return this.rateLimiter.run(() => this.attempt(method, params, 1));
     }

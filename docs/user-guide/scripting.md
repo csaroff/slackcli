@@ -206,6 +206,36 @@ unknown group, a draft or `saved` write command on an app token or a scheduled-m
 on a browser session exits `1` with the same error. **Slack checks permissions only on the real write**, so a dry run can
 pass where the write is then refused (`missing_scope`, `not_in_channel`, …).
 
+## Draft-only mode
+
+When an assistant or script prepares messages for you to review, draft-only
+mode makes sure none of them reach anyone until you press send in Slack. It is
+on when either is true:
+
+- the file `~/.config/slackcli/draft-only` exists (`touch` it; contents ignored)
+- `SLACKCLI_DRAFT_ONLY` is set to anything other than `0`, `false`, `no` or `off`
+
+The file cannot be switched off from the environment, so it is the one to use
+for an agent that controls its own variables.
+
+While it is on, every Slack call that is not a read is refused before it is
+sent, except `messages draft` (with `--file`, uploaded privately) and the
+DM lookup it needs for a user recipient. Posting,
+editing, deleting, reacting, scheduling, `send-draft`, `delete-draft`, and an
+upload that would share files into a conversation fail with
+`permission_denied` and exit 1. `--dry-run` still previews them.
+
+```bash
+touch ~/.config/slackcli/draft-only
+slackcli messages draft --permalink https://acme.slack.com/archives/C1234567890/p1712345678123456 \
+  --message-file reply.md --file screenshot.png    # works
+slackcli messages send --recipient-id C1234567890 --message hi
+# Error: Draft-only mode refuses chat.postMessage: only reads, drafts and private uploads are allowed
+```
+
+It guards against mistakes, not a hostile caller: anything that can delete the
+file or read the stored tokens can still post.
+
 ## Exit codes
 
 `0` on success, `1` on failure. Without `--json`, a failure prints a message to
